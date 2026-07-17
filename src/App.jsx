@@ -742,7 +742,7 @@ function App() {
                             }
                           }}
                         >
-                          Verify & Grant
+                          Verify & Grant permission
                         </button>
                         <button type="button" onClick={() => setPermissionRequests((prev) => prev.filter((x) => x.phone !== p.phone))}>
                           Deny
