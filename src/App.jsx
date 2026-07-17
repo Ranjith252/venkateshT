@@ -1,0 +1,1047 @@
+import { useEffect, useState } from 'react'
+import './App.css'
+
+const initialQuestions = [] // Start with empty questions - admin will add up to 100 questions
+
+const normalizeQuestions = (value) => {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .map((item, index) => {
+      // Validate basic question structure
+      if (!item || typeof item !== 'object') return null
+      
+      const rawQuestion = typeof item?.question === 'string' ? item.question.trim() : ''
+      if (!rawQuestion) return null // Skip questions without text
+      
+      let rawOptions = item?.options
+      
+      // Handle various malformed option formats
+      if (!Array.isArray(rawOptions)) {
+        rawOptions = []
+      }
+      
+      // Flatten nested arrays (corrupted data sometimes has extra nesting)
+      const flatOptions = []
+      for (const opt of rawOptions) {
+        if (Array.isArray(opt)) {
+          flatOptions.push(...opt)
+        } else {
+          flatOptions.push(opt)
+        }
+      }
+      
+      // Clean options: keep only meaningful strings
+      const cleanedOptions = flatOptions
+        .filter((opt) => {
+          const str = String(opt).trim()
+          // Skip empty, single chars, single letters (A-D), or pure numbers
+          if (str.length <= 1) return false
+          if (/^[A-D]\.?$/.test(str)) return false
+          if (/^\d+$/.test(str)) return false
+          return true
+        })
+        .slice(0, 4) // Take max 4
+
+      // Ensure exactly 4 options by padding with placeholders
+      const options = [
+        ...cleanedOptions,
+        ...Array.from(
+          { length: Math.max(0, 4 - cleanedOptions.length) },
+          (_, i) => `Option ${String.fromCharCode(65 + cleanedOptions.length + i)}`
+        ),
+      ].slice(0, 4)
+
+      const answerIndex = Number(item?.answer)
+      const safeAnswer = Number.isInteger(answerIndex) && answerIndex >= 0 && answerIndex < 4
+        ? answerIndex
+        : 0
+
+      return {
+        ...item,
+        id: item?.id ?? index + 1,
+        question: rawQuestion,
+        options,
+        answer: safeAnswer,
+      }
+    })
+    .filter(Boolean) // Remove any null entries from invalid questions
+}
+
+function App() {
+  const [user, setUser] = useState('')
+  const [userRole, setUserRole] = useState('user')
+  const [nameInput, setNameInput] = useState('')
+  const [phoneInput, setPhoneInput] = useState('')
+  const [passwordInput, setPasswordInput] = useState('')
+  const [forgotMode, setForgotMode] = useState(false)
+  const [currentPhone, setCurrentPhone] = useState('')
+  const [adminPassword, setAdminPassword] = useState(() => localStorage.getItem('adminPassword') || 'V7702602713V')
+  const [permittedPhones, setPermittedPhones] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('permittedPhones') || '[]')
+    } catch (e) {
+      return []
+    }
+  })
+  // permissionRequests: array of { phone, otp, password, requestedAt }
+  const [permissionRequests, setPermissionRequests] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('permissionRequests') || '[]')
+    } catch (e) {
+      return []
+    }
+  })
+  const [otpInputs, setOtpInputs] = useState({})
+  // persisted user store: { phone: password }
+  const [users, setUsers] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('quizUsers') || '{}')
+    } catch (e) {
+      return {}
+    }
+  })
+  const [resetRequests, setResetRequests] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('resetRequests') || '{}')
+    } catch (e) {
+      return {}
+    }
+  })
+  const [errorMessage, setErrorMessage] = useState('')
+  const [resetCodeInput, setResetCodeInput] = useState('')
+  const [newPasswordInput, setNewPasswordInput] = useState('')
+  const [quizTitle, setQuizTitle] = useState('My Quiz')
+  const [questions, setQuestions] = useState(() => {
+    // Always start with empty questions - admin will add them
+    try {
+      localStorage.removeItem('quizQuestions') // Clear any existing questions
+    } catch (e) {}
+    return []
+  })
+  const [searchTerm, setSearchTerm] = useState('')
+  const [videos, setVideos] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('uploadedVideos') || '[]')
+    } catch (e) {
+      return []
+    }
+  })
+  const [videoTitleInput, setVideoTitleInput] = useState('')
+  const [quizStarted, setQuizStarted] = useState(false)
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [selectedOption, setSelectedOption] = useState(null)
+  const [score, setScore] = useState(0)
+  const [isAnswered, setIsAnswered] = useState(false)
+  const [showScore, setShowScore] = useState(false)
+  const [newQuestionText, setNewQuestionText] = useState('')
+  const [newOptions, setNewOptions] = useState(['', '', '', ''])
+  const [newCorrectIndex, setNewCorrectIndex] = useState(0)
+  const [exams, setExams] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('quizExams') || '{}')
+    } catch (e) {
+      return {}
+    }
+  })
+  const [examDateInput, setExamDateInput] = useState('')
+  const [examSizeInput, setExamSizeInput] = useState(20)
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('adminPassword', adminPassword)
+    } catch (e) {}
+  }, [adminPassword])
+
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem('quizUser', user)
+      localStorage.setItem('quizUserRole', userRole)
+    }
+  }, [user, userRole])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('permittedPhones', JSON.stringify(permittedPhones))
+    } catch (e) {}
+  }, [permittedPhones])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('permissionRequests', JSON.stringify(permissionRequests))
+    } catch (e) {}
+  }, [permissionRequests])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('quizUsers', JSON.stringify(users))
+    } catch (e) {}
+  }, [users])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('resetRequests', JSON.stringify(resetRequests))
+    } catch (e) {}
+  }, [resetRequests])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('quizQuestions', JSON.stringify(normalizeQuestions(questions)))
+    } catch (e) {}
+  }, [questions])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('quizExams', JSON.stringify(exams))
+    } catch (e) {}
+  }, [exams])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('uploadedVideos', JSON.stringify(videos))
+    } catch (e) {}
+  }, [videos])
+
+  const isAdmin = userRole === 'admin'
+  const question = questions[currentIndex] || null
+  const questionOptions = Array.isArray(question?.options) && question.options.length > 0
+    ? question.options.filter(Boolean).slice(0, 4) // Filter empty options and take first 4
+    : ['Option A', 'Option B', 'Option C', 'Option D']
+  const isCorrect = selectedOption === question?.answer
+
+  const loginStatusMessage = (() => {
+    const phone = phoneInput.trim()
+    if (phone) {
+      if (permittedPhones.includes(phone)) {
+        return 'This phone has permission. Enter your password to login and take exams.'
+      }
+      if (permissionRequests.some((r) => r.phone === phone)) {
+        return 'Permission request is pending. Teacher must approve your OTP before you can take exams.'
+      }
+      return 'New phone detected. After you submit, the teacher will receive an OTP to approve your access.'
+    }
+    if (nameInput.trim()) {
+      return 'Admin login: enter your password to access the dashboard.'
+    }
+    return 'Student login uses phone and password. First-time users request approval from the teacher.'
+  })()
+
+  const handleOptionClick = (optionIndex) => {
+    if (isAnswered) return
+    setSelectedOption(optionIndex)
+  }
+
+  const handleSubmit = () => {
+    if (selectedOption === null) return
+    if (isCorrect) {
+      setScore((prev) => prev + 1)
+    }
+    setIsAnswered(true)
+  }
+
+  const handleNext = () => {
+    const nextIndex = currentIndex + 1
+    if (nextIndex < questions.length) {
+      setCurrentIndex(nextIndex)
+      setSelectedOption(null)
+      setIsAnswered(false)
+    } else {
+      setShowScore(true)
+    }
+  }
+
+  const resetQuiz = () => {
+    setCurrentIndex(0)
+    setSelectedOption(null)
+    setScore(0)
+    setIsAnswered(false)
+    setShowScore(false)
+  }
+
+  const handleRestart = () => {
+    resetQuiz()
+  }
+
+  const handleLogout = () => {
+    resetQuiz()
+    setQuizStarted(false)
+    setUser('')
+    setUserRole('user')
+    localStorage.removeItem('quizUser')
+    localStorage.removeItem('quizUserRole')
+  }
+
+  const handleLogin = (event) => {
+    event.preventDefault()
+    const name = nameInput.trim()
+    const adminNames = ['venkatesh', 'venjatesh', 'admin', 'teacher']
+    // Only accept exact admin username+password
+    if (name && adminNames.includes(name.toLowerCase()) && passwordInput === adminPassword) {
+      setUser(name)
+      setUserRole('admin')
+      setNameInput('')
+      setPasswordInput('')
+      setCurrentPhone('')
+      setErrorMessage('')
+      setForgotMode(false)
+      return
+    }
+
+    if (forgotMode) {
+      const phone = phoneInput.trim()
+      if (!phone) {
+        setErrorMessage('Enter your phone to reset your password')
+        return
+      }
+      const resetRequest = resetRequests[phone]
+      if (!resetRequest) {
+        setErrorMessage('No reset code requested for this phone')
+        return
+      }
+      if (resetCodeInput.trim() !== resetRequest.code) {
+        setErrorMessage('Reset code is incorrect')
+        return
+      }
+      if (!newPasswordInput.trim()) {
+        setErrorMessage('Enter a new password')
+        return
+      }
+      setUsers((prev) => ({ ...prev, [phone]: newPasswordInput.trim() }))
+      setResetRequests((prev) => {
+        const copy = { ...prev }
+        delete copy[phone]
+        return copy
+      })
+      setErrorMessage('Password reset successfully. Login with your new password.')
+      setForgotMode(false)
+      setResetCodeInput('')
+      setNewPasswordInput('')
+      return
+    }
+
+    if (phoneInput.trim() && passwordInput) {
+      const phone = phoneInput.trim()
+      if (users[phone]) {
+        if (users[phone] === passwordInput) {
+          setUser(phone)
+          setUserRole('user')
+          setCurrentPhone(phone)
+          setNameInput('')
+          setPasswordInput('')
+          setPhoneInput('')
+          setErrorMessage('')
+        } else {
+          setErrorMessage('Incorrect password for this phone')
+        }
+      } else {
+        const existing = permissionRequests.find((r) => r.phone === phone)
+        if (!existing) {
+          const otp = String(Math.floor(100000 + Math.random() * 900000))
+          const req = { phone, otp, password: passwordInput, requestedAt: new Date().toISOString() }
+          setPermissionRequests((prev) => [...prev, req])
+          setErrorMessage('Permission requested. Teacher will receive OTP to approve.')
+        } else {
+          setErrorMessage('Permission already requested. Wait for teacher approval.')
+        }
+      }
+    } else if (name) {
+      setErrorMessage('Admin login requires password')
+    } else {
+      setErrorMessage('Enter phone and password to login or request access')
+    }
+  }
+
+  const handleAddQuestion = () => {
+    const text = newQuestionText.trim()
+    const trimmedOptions = newOptions.map((option) => option.trim()).slice(0, 4) // Ensure exactly 4 options
+
+    // Validate: question text and all 4 options must be filled
+    if (!text || trimmedOptions.length !== 4 || trimmedOptions.some((option) => option === '')) {
+      setErrorMessage('Question and all 4 options must be filled')
+      return
+    }
+
+    setQuestions((prev) => {
+      if (prev.length >= 100) return prev
+      return [
+        ...prev,
+        {
+          id: prev.length + 1,
+          question: text,
+          options: trimmedOptions, // Always exactly 4 options
+          answer: newCorrectIndex,
+        },
+      ]
+    })
+
+    setNewQuestionText('')
+    setNewOptions(['', '', '', ''])
+    setNewCorrectIndex(0)
+    setErrorMessage('')
+  }
+
+  const handleStartQuiz = () => {
+    if (!quizTitle.trim() || questions.length === 0) return
+    setQuizStarted(true)
+    resetQuiz()
+  }
+
+  const handleReturnToDashboard = () => {
+    setQuizStarted(false)
+    setShowScore(false)
+    resetQuiz()
+  }
+
+  const visibleQuestions = searchTerm.trim()
+    ? questions.filter((question) =>
+        question.question.toLowerCase().includes(searchTerm.toLowerCase()),
+      )
+    : questions
+
+  const handleVideoUpload = (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const dataUrl = e.target.result
+      const vid = {
+        id: Date.now() + Math.floor(Math.random() * 10000),
+        name: file.name,
+        title: (videoTitleInput || file.name).trim(),
+        data: dataUrl,
+      }
+      setVideos((prev) => [...prev, vid])
+      setVideoTitleInput('')
+    }
+    reader.readAsDataURL(file)
+    // clear input so same file can be re-selected later
+    try {
+      event.target.value = ''
+    } catch (e) {}
+  }
+
+  // CSV import for bulk questions (admin-only). CSV columns: question,optionA,optionB,optionC,optionD,answerIndex
+  const handleImportCSV = (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const text = e.target.result
+      const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+      const parsed = []
+      for (const line of lines) {
+        const cols = line.split(',')
+        if (cols.length < 6) continue
+        const [q, a, b, c, d, ans] = cols.map((c) => c.trim())
+        const answerIndex = Number(ans)
+        if (Number.isNaN(answerIndex) || answerIndex < 0 || answerIndex > 3) continue
+        parsed.push({
+          id: Date.now() + Math.floor(Math.random() * 10000),
+          question: q,
+          options: [a, b, c, d],
+          answer: answerIndex,
+        })
+      }
+      if (parsed.length) {
+        setQuestions((prev) => {
+          const remaining = 100 - prev.length
+          if (remaining <= 0) return prev
+          const toAdd = parsed.slice(0, remaining)
+          // mark requests as permitted only if phone has been permitted (no automatic permission)
+          return [...prev, ...toAdd]
+        })
+      }
+    }
+    reader.readAsText(file)
+    // clear input value so same file can be re-selected later
+    event.target.value = ''
+  }
+
+  // Create an exam for a given date with N questions (default 20), valid for 24 hours
+  const handleCreateExam = (dateStr, count = 20) => {
+    if (!dateStr) return
+    // pick up to `count` random questions from pool
+    const pool = [...questions]
+    if (pool.length === 0) return
+    const selected = []
+    while (selected.length < Math.min(count, pool.length)) {
+      const idx = Math.floor(Math.random() * pool.length)
+      selected.push(pool.splice(idx, 1)[0])
+    }
+    const now = new Date().toISOString()
+    setExams((prev) => ({
+      ...prev,
+      [dateStr]: {
+        title: `Exam ${dateStr}`,
+        questions: selected,
+        createdAt: now, // Store creation timestamp
+        expiresAt: new Date(new Date(now).getTime() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours from now
+      },
+    }))
+  }
+
+  const handleClearAllData = () => {
+    if (window.confirm('Are you sure? This will delete all questions, exams, videos, and user data. This cannot be undone.')) {
+      localStorage.removeItem('quizQuestions')
+      localStorage.removeItem('quizExams')
+      localStorage.removeItem('uploadedVideos')
+      localStorage.removeItem('quizUsers')
+      localStorage.removeItem('permissionRequests')
+      localStorage.removeItem('permittedPhones')
+      localStorage.removeItem('resetRequests')
+      setQuestions([])
+      setExams({})
+      setVideos([])
+      setUsers({})
+      setPermissionRequests([])
+      setPermittedPhones([])
+      setResetRequests({})
+      setErrorMessage('All data has been cleared. Start fresh!')
+    }
+  }
+
+  const getTodaysExam = () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const exam = exams[today]
+    if (!exam) return null
+    
+    // Check if exam has expired (24 hours)
+    const now = new Date()
+    const expiresAt = exam.expiresAt ? new Date(exam.expiresAt) : new Date(exam.createdAt || 0) 
+    if (now > expiresAt) {
+      return null // Exam expired
+    }
+    return exam
+  }
+
+  const handleStartExamToday = () => {
+    const todays = getTodaysExam()
+    if (!todays) {
+      setErrorMessage('No exam available or exam has expired (24-hour limit).')
+      return
+    }
+    // check if user is permitted (students must have phone permission to take exam)
+    if (userRole === 'admin') {
+      setQuestions(normalizeQuestions(todays.questions))
+      setQuizStarted(true)
+      resetQuiz()
+      return
+    }
+    const phone = currentPhone || user
+    if (permittedPhones.includes(phone)) {
+      setQuestions(normalizeQuestions(todays.questions))
+      setQuizStarted(true)
+      resetQuiz()
+    } else {
+      // not permitted: create a permission request if not already requested
+      const exists = permissionRequests.find((r) => r.phone === phone)
+      if (!exists) {
+        const otp = String(Math.floor(100000 + Math.random() * 900000))
+        const req = { phone, otp, password: '', requestedAt: new Date().toISOString() }
+        setPermissionRequests((prev) => [...prev, req])
+      }
+      setErrorMessage('You are not permitted to take this exam yet. Permission requested from admin.')
+    }
+  }
+
+  // small component to manage permitted phones inside this file
+  function PermittedPhonesManager() {
+    return (
+      <div>
+        {permittedPhones.length === 0 ? (
+          <p>No permitted phones yet.</p>
+        ) : (
+          <ul>
+            {permittedPhones.map((p) => (
+              <li key={p}>
+                {p}{' '}
+                <button
+                  type="button"
+                  onClick={() => setPermittedPhones((prev) => prev.filter((x) => x !== p))}
+                >
+                  Revoke
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    )
+  }
+
+  if (!user) {
+    return (
+      <div className="login-screen">
+        <div className="login-card">
+          <h1>Admin / Student Login</h1>
+          <form onSubmit={handleLogin} className="login-form">
+            <p className="login-note">Admin: enter your name and password. Student: enter phone and password to request access.</p>
+            <p className="login-note">New students must request permission here, then the admin approves them before they can take the exam.</p>
+            
+            <label htmlFor="name">Name</label>
+            <input
+              id="name"
+              type="text"
+
+              value={nameInput}
+              onChange={(e) => setNameInput(e.target.value)}
+              placeholder="Your name"
+            />
+            <label htmlFor="phone">Phone (students login with phone)</label>
+            <input
+              id="phone"
+              type="tel"
+              value={phoneInput}
+              onChange={(e) => setPhoneInput(e.target.value)}
+              placeholder="Student phone (digits only)"
+            />
+            {phoneInput.trim() && <p className="login-status">{loginStatusMessage}</p>}
+            {!forgotMode && (
+              <>
+                <label htmlFor="password">Password</label>
+                <input
+                  id="password"
+                  type="password"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="Admin or student password"
+                />
+              </>
+            )}
+            {forgotMode && (
+              <>
+                <label htmlFor="reset-code">Reset code</label>
+                <input
+                  id="reset-code"
+                  type="text"
+                  value={resetCodeInput}
+                  onChange={(e) => setResetCodeInput(e.target.value)}
+                  placeholder="Enter reset code"
+                />
+                <label htmlFor="new-password">New password</label>
+                <input
+                  id="new-password"
+                  type="password"
+                  value={newPasswordInput}
+                  onChange={(e) => setNewPasswordInput(e.target.value)}
+                  placeholder="Enter new password"
+                />
+              </>
+            )}
+            {errorMessage && <p className="error-text">{errorMessage}</p>}
+            <button type="submit" className="primary-button" disabled={forgotMode ? !resetCodeInput.trim() || !newPasswordInput.trim() || !phoneInput.trim() : !passwordInput || (!nameInput.trim() && !phoneInput.trim())}>
+              {forgotMode ? 'Reset password' : 'Login'}
+            </button>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => {
+                setForgotMode((prev) => !prev)
+                setErrorMessage('')
+              }}
+            >
+              {forgotMode ? 'Back to login' : 'Forgot password?'}
+            </button>
+          </form>
+        </div>
+      </div>
+    )
+  }
+
+  if (!quizStarted) {
+    return (
+      <div className="quiz-app">
+        <header className="quiz-header">
+          <div className="quiz-header-top">
+            <div>
+              <h1>{isAdmin ? 'Create Quiz' : 'Student Dashboard'}</h1>
+              <p>
+                {isAdmin
+                  ? `Welcome, ${user}. Set your quiz title and start when ready.`
+                  : `Welcome, ${user}. Start your scheduled MCQ exam when available.`}
+              </p>
+            </div>
+            <button type="button" className="secondary-button" onClick={handleLogout}>
+              Logout
+            </button>
+          </div>
+
+          <div className="dashboard-section">
+            <h2>Exams</h2>
+            {isAdmin ? (
+              <div className="exam-creator">
+                <label htmlFor="exam-date">Exam date</label>
+                <input id="exam-date" type="date" value={examDateInput} onChange={(e) => setExamDateInput(e.target.value)} />
+                <label htmlFor="exam-size">Size (max 100)</label>
+                <input id="exam-size" type="number" min={1} max={100} value={examSizeInput} onChange={(e) => setExamSizeInput(Number(e.target.value))} />
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => {
+                    if (examDateInput) {
+                      const size = Math.min(100, Math.max(1, Number(examSizeInput) || 20))
+                      handleCreateExam(examDateInput, size)
+                      setExamDateInput('')
+                    }
+                  }}
+                  disabled={!examDateInput || questions.length === 0}
+                >
+                  Create Exam
+                </button>
+              </div>
+            ) : (
+              <div className="exam-user">
+                {getTodaysExam() ? (
+                  <>
+                    <p>Today's exam is available (valid for 24 hours from creation).</p>
+                    <button type="button" className="primary-button" onClick={handleStartExamToday}>
+                      Start Today's Exam
+                    </button>
+                  </>
+                ) : (
+                  <p>No exam scheduled for today or exam has expired (24-hour limit).</p>
+                )}
+              </div>
+            )}
+          {isAdmin && (
+            <div className="permission-requests">
+              <h3>Permission requests</h3>
+              {permissionRequests.length === 0 ? (
+                <p>No requests.</p>
+              ) : (
+                <ul>
+                  {permissionRequests.map((p) => (
+                    <li key={p.phone}>
+                      <div>
+                        <strong>{p.phone}</strong> — OTP: <code>{p.otp}</code>
+                      </div>
+                      <div>
+                        <label>Enter OTP to verify: </label>
+                        <input
+                          type="text"
+                          value={otpInputs[p.phone] || ''}
+                          onChange={(e) => setOtpInputs((s) => ({ ...s, [p.phone]: e.target.value }))}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const entered = (otpInputs[p.phone] || '').trim()
+                            if (entered === p.otp) {
+                              // grant: add to users (store password if provided) and permittedPhones
+                              setUsers((prev) => ({ ...prev, [p.phone]: p.password || '' }))
+                              setPermittedPhones((prev) => (prev.includes(p.phone) ? prev : [...prev, p.phone]))
+                              setPermissionRequests((prev) => prev.filter((x) => x.phone !== p.phone))
+                              setOtpInputs((s) => {
+                                const copy = { ...s }
+                                delete copy[p.phone]
+                                return copy
+                              })
+                              setErrorMessage(`Permission granted for ${p.phone}`)
+                            } else {
+                              setErrorMessage('OTP does not match')
+                            }
+                          }}
+                        >
+                          Verify & Grant
+                        </button>
+                        <button type="button" onClick={() => setPermissionRequests((prev) => prev.filter((x) => x.phone !== p.phone))}>
+                          Deny
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
+          {isAdmin && (
+            <div className="permitted-phones">
+              <h3>Permitted phones</h3>
+              <PermittedPhonesManager />
+            </div>
+          )}
+          </div>
+        </header>
+
+        {isAdmin && (
+          <section className="dashboard-controls">
+            <div className="search-box">
+              <span className="search-icon">🔍</span>
+              <input
+                type="text"
+                placeholder="Search questions"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+            <div className="upload-group">
+              <label htmlFor="video-title">Video title</label>
+              <input
+                id="video-title"
+                type="text"
+                value={videoTitleInput}
+                onChange={(e) => setVideoTitleInput(e.target.value)}
+                placeholder="Enter video title"
+              />
+              <label htmlFor="video-upload" className="upload-button">
+                📤 Upload video
+              </label>
+              <input
+                id="video-upload"
+                type="file"
+                accept="video/*"
+                hidden
+                onChange={handleVideoUpload}
+              />
+              <p className="upload-note">Upload a video with a title; it will be visible to students.</p>
+            </div>
+            <div className="import-group">
+              <label htmlFor="csv-import" className="upload-button">📥 Import CSV (question,A,B,C,D,answerIndex)</label>
+              <input id="csv-import" type="file" accept=".csv,text/csv" hidden onChange={handleImportCSV} disabled={questions.length >= 100} />
+            </div>
+            <div className="import-group">
+              <button type="button" className="secondary-button" onClick={handleClearAllData} style={{ backgroundColor: '#ffebee', color: '#c62828' }}>
+                🗑️ Clear All Data
+              </button>
+              <p className="upload-note">Removes all questions, exams, videos, and user data. Start completely fresh.</p>
+            </div>
+          </section>
+        )}
+
+        <section className="dashboard-card">
+          <div className="dashboard-section">
+            <h2>Quiz details</h2>
+            <label htmlFor="quiz-title">Quiz title</label>
+            <input
+              id="quiz-title"
+              type="text"
+              value={quizTitle}
+              onChange={(e) => setQuizTitle(e.target.value)}
+              placeholder="Enter quiz title"
+              disabled={!isAdmin}
+            />
+            <p className="dashboard-note">
+              {isAdmin
+                ? 'Set the quiz title and start the quiz when ready.'
+                : 'Only admins can edit the quiz title, upload video, or add new questions.'}
+            </p>
+          </div>
+
+          {videos && videos.length > 0 && (
+            <div className="dashboard-section lecture-video">
+              <h2>Lecture Videos</h2>
+              {videos.map((v, idx) => (
+                <div key={v.id} className="video-item">
+                  <h3>
+                    {idx + 1}. {v.title || v.name}
+                  </h3>
+                  <video controls src={v.data} style={{ maxWidth: '100%', height: 'auto' }} />
+                  {isAdmin && (
+                    <div style={{ marginTop: 6 }}>
+                      <button type="button" onClick={() => {
+                        setVideos((prev) => {
+                          const copy = [...prev]
+                          const i = copy.findIndex((x) => x.id === v.id)
+                          if (i <= 0) return prev
+                          const tmp = copy[i-1]
+                          copy[i-1] = copy[i]
+                          copy[i] = tmp
+                          return copy
+                        })
+                      }} disabled={idx === 0}>Up</button>
+                      <button type="button" onClick={() => {
+                        setVideos((prev) => {
+                          const copy = [...prev]
+                          const i = copy.findIndex((x) => x.id === v.id)
+                          if (i === -1 || i === copy.length - 1) return prev
+                          const tmp = copy[i+1]
+                          copy[i+1] = copy[i]
+                          copy[i] = tmp
+                          return copy
+                        })
+                      }} disabled={idx === videos.length - 1}>Down</button>
+                      <button type="button" onClick={() => setVideos((prev) => prev.filter((x) => x.id !== v.id))}>Remove</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {isAdmin && (
+            <div className="dashboard-section">
+              <h2>Add question</h2>
+              <label htmlFor="question-text">Question text</label>
+              <input
+                id="question-text"
+                type="text"
+                value={newQuestionText}
+                onChange={(e) => setNewQuestionText(e.target.value)}
+                placeholder="Type a question"
+              />
+              {newOptions.map((option, index) => (
+                <div key={index} className="option-row">
+                  <label htmlFor={`option-${index}`}>Option {String.fromCharCode(65 + index)}</label>
+                  <input
+                    id={`option-${index}`}
+                    type="text"
+                    value={option}
+                    onChange={(e) => {
+                      const next = [...newOptions]
+                      next[index] = e.target.value
+                      setNewOptions(next)
+                    }}
+                    placeholder={`Answer ${String.fromCharCode(65 + index)}`}
+                  />
+                </div>
+              ))}
+              <label htmlFor="correct-answer">Correct answer</label>
+              <select
+                id="correct-answer"
+                value={newCorrectIndex}
+                onChange={(e) => setNewCorrectIndex(Number(e.target.value))}
+              >
+                <option value={0}>A</option>
+                <option value={1}>B</option>
+                <option value={2}>C</option>
+                <option value={3}>D</option>
+              </select>
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleAddQuestion}
+                disabled={!newQuestionText.trim() || newOptions.some((option) => !option.trim()) || questions.length >= 100}
+              >
+                Add Question
+              </button>
+            </div>
+          )}
+
+          <div className="dashboard-section quiz-summary">
+            <h2>Quiz preview</h2>
+            <p>Quiz title: <strong>{quizTitle || 'Untitled quiz'}</strong></p>
+            <p>
+              Showing <strong>{visibleQuestions.length}</strong> of <strong>{questions.length}</strong> questions
+            </p>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={handleStartQuiz}
+              disabled={!quizTitle.trim() || questions.length === 0}
+            >
+              Start Quiz
+            </button>
+          </div>
+        </section>
+      </div>
+    )
+  }
+
+  return (
+    <div className="quiz-app">
+      <header className="quiz-header">
+        <div className="quiz-header-top">
+          <div>
+            <h1>{quizTitle}</h1>
+            <p>Welcome, {user}. Choose the best answer and submit each question.</p>
+          </div>
+          <div className="quiz-header-actions">
+            <button type="button" className="secondary-button" onClick={handleReturnToDashboard}>
+              Back to Dashboard
+            </button>
+            <button type="button" className="secondary-button" onClick={handleLogout}>
+              Logout
+            </button>
+          </div>
+        </div>
+      </header>
+
+      {showScore ? (
+        <section className="score-card">
+          <h2>Your score</h2>
+          <p>
+            You answered <strong>{score}</strong> of <strong>{questions.length}</strong> correctly.
+          </p>
+          <div className="quiz-actions">
+            <button type="button" className="primary-button" onClick={handleRestart}>
+              Restart Quiz
+            </button>
+            <button type="button" className="secondary-button" onClick={handleReturnToDashboard}>
+              Back to Dashboard
+            </button>
+          </div>
+        </section>
+      ) : (
+        <section className="question-card">
+          {!question ? (
+            <div className="empty-state">
+              <h2>No questions available</h2>
+              <p>Add questions or create an exam before starting the quiz.</p>
+              <button type="button" className="secondary-button" onClick={handleReturnToDashboard}>
+                Back to Dashboard
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="question-top">
+                <span className="question-count">
+                  Question {currentIndex + 1} of {questions.length}
+                </span>
+                <h2>{question.question}</h2>
+              </div>
+
+              <div className="options-list">
+                {questionOptions.map((option, index) => {
+                  let optionClass = 'option-button'
+                  if (isAnswered) {
+                    if (index === question.answer) optionClass += ' correct'
+                    else if (index === selectedOption) optionClass += ' incorrect'
+                  } else if (index === selectedOption) {
+                    optionClass += ' selected'
+                  }
+
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      className={optionClass}
+                      onClick={() => handleOptionClick(index)}
+                    >
+                      <span className="option-label">{String.fromCharCode(65 + index)}.</span>
+                      {option}
+                    </button>
+                  )
+                })}
+              </div>
+
+              <div className="quiz-actions">
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={isAnswered ? handleNext : handleSubmit}
+                  disabled={selectedOption === null}
+                >
+                  {isAnswered ? (currentIndex + 1 < questions.length ? 'Next question' : 'Show results') : 'Submit answer'}
+                </button>
+              </div>
+
+              {isAnswered && (
+                <div className="feedback-box">
+                  {isCorrect ? (
+                    <p className="feedback-correct">Correct! Good job.</p>
+                  ) : (
+                    <p className="feedback-incorrect">
+                      Wrong. The correct answer is <strong>{question.options[question.answer]}</strong>.
+                    </p>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+    </div>
+  )
+}
+
+export default App
