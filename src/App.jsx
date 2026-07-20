@@ -134,6 +134,7 @@ function App() {
   const [score, setScore] = useState(0)
   const [isAnswered, setIsAnswered] = useState(false)
   const [showScore, setShowScore] = useState(false)
+  const [viewingStudyNotes, setViewingStudyNotes] = useState(false)
   const [newQuestionText, setNewQuestionText] = useState('')
   const [newOptions, setNewOptions] = useState(['', '', '', ''])
   const [newCorrectIndex, setNewCorrectIndex] = useState(0)
@@ -146,6 +147,28 @@ function App() {
   })
   const [examDateInput, setExamDateInput] = useState('')
   const [examSizeInput, setExamSizeInput] = useState(20)
+  // SEPARATE Study Materials System (Independent from Quiz)
+  const [studyNotes, setStudyNotes] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('studyNotes') || '[]')
+    } catch (e) {
+      return []
+    }
+  })
+  const [studySubjects, setStudySubjects] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('studySubjects') || '[]')
+    } catch (e) {
+      return []
+    }
+  })
+  const [newStudySubject, setNewStudySubject] = useState('')
+  const [newStudyTopic, setNewStudyTopic] = useState('')
+  const [newStudyQuestion, setNewStudyQuestion] = useState('')
+  const [newStudyAnswer, setNewStudyAnswer] = useState('')
+  const [newStudyExplanation, setNewStudyExplanation] = useState('')
+  const [viewingStudyMaterials, setViewingStudyMaterials] = useState(false)
+  const [expandedSubject, setExpandedSubject] = useState(null)
 
   useEffect(() => {
     try {
@@ -201,6 +224,18 @@ function App() {
       localStorage.setItem('uploadedVideos', JSON.stringify(videos))
     } catch (e) {}
   }, [videos])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('studyNotes', JSON.stringify(studyNotes))
+    } catch (e) {}
+  }, [studyNotes])
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('studySubjects', JSON.stringify(studySubjects))
+    } catch (e) {}
+  }, [studySubjects])
 
   const isAdmin = userRole === 'admin'
   const question = questions[currentIndex] || null
@@ -380,6 +415,45 @@ function App() {
     setErrorMessage('')
   }
 
+  const handleAddStudyNote = () => {
+    const question = newStudyQuestion.trim()
+    const subject = newStudySubject.trim()
+    const answer = newStudyAnswer.trim()
+    const explanation = newStudyExplanation.trim()
+
+    // Validate
+    if (!question || !subject || !answer) {
+      setErrorMessage('Subject, Question, and Answer are required')
+      return
+    }
+
+    // Add subject if not already present
+    if (!studySubjects.includes(subject)) {
+      setStudySubjects((prev) => [...prev, subject])
+    }
+
+    // Add study note
+    setStudyNotes((prev) => [
+      ...prev,
+      {
+        id: Date.now(),
+        subject: subject,
+        topic: newStudyTopic.trim() || '',
+        question: question,
+        answer: answer,
+        explanation: explanation,
+      },
+    ])
+
+    // Reset form
+    setNewStudySubject('')
+    setNewStudyTopic('')
+    setNewStudyQuestion('')
+    setNewStudyAnswer('')
+    setNewStudyExplanation('')
+    setErrorMessage('')
+  }
+
   const handleStartQuiz = () => {
     if (!quizTitle.trim() || questions.length === 0) return
     setQuizStarted(true)
@@ -447,7 +521,6 @@ function App() {
           const remaining = 100 - prev.length
           if (remaining <= 0) return prev
           const toAdd = parsed.slice(0, remaining)
-          // mark requests as permitted only if phone has been permitted (no automatic permission)
           return [...prev, ...toAdd]
         })
       }
@@ -703,6 +776,35 @@ function App() {
                 )}
               </div>
             )}
+
+          {!isAdmin && studyNotes.length > 0 && (
+            <div className="dashboard-section">
+              <h2>📚 Study Materials</h2>
+              <p>Browse and study materials organized by subject to prepare for your exam.</p>
+              {studySubjects.map((subject) => {
+                const subjectMaterials = studyNotes.filter((n) => n.subject === subject)
+                return (
+                  <div key={subject} style={{ marginTop: '12px', padding: '10px', backgroundColor: '#f5f5f5', borderRadius: '4px', border: '1px solid #ddd' }}>
+                    <h3 style={{ margin: '0 0 6px 0', fontSize: '1em' }}>{subject}</h3>
+                    <p style={{ margin: '0 0 8px 0', fontSize: '0.85em', color: '#666' }}>
+                      {subjectMaterials.length} material{subjectMaterials.length !== 1 ? 's' : ''}
+                    </p>
+                    {subjectMaterials.map((material, idx) => (
+                      <div key={material.id} style={{ marginTop: '6px', padding: '8px', backgroundColor: '#fff', borderRadius: '3px', border: '1px solid #e0e0e0' }}>
+                        <p style={{ margin: '0 0 4px 0', fontSize: '0.9em' }}><strong>Q{idx + 1}. {material.question}</strong></p>
+                        <p style={{ margin: '0 0 4px 0', fontSize: '0.9em', backgroundColor: '#e8f5e9', padding: '4px', borderRadius: '2px' }}><strong>✓ Answer:</strong> {material.answer}</p>
+                        {material.topic && <p style={{ margin: '4px 0', fontSize: '0.85em', color: '#666' }}>📌 <strong>Topic:</strong> {material.topic}</p>}
+                        {material.explanation && <div style={{ marginTop: '4px', padding: '6px', backgroundColor: '#e3f2fd', borderLeft: '2px solid #1976d2', borderRadius: '2px' }}>
+                          <p style={{ margin: '0', fontSize: '0.85em', color: '#1565c0' }}><strong>💡 Explanation:</strong> {material.explanation}</p>
+                        </div>}
+                      </div>
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           {isAdmin && (
             <div className="permission-requests">
               <h3>Permission requests</h3>
@@ -933,6 +1035,105 @@ function App() {
             </button>
           </div>
         </section>
+
+        {isAdmin && (
+          <section className="dashboard-card">
+            <div className="dashboard-section">
+              <h2>📚 Study Materials (Separate from Quiz)</h2>
+              <p>Add study notes for each subject with answers and explanations. Students can study this material independently.</p>
+              <label htmlFor="study-subject">Subject *</label>
+              <input
+                id="study-subject"
+                type="text"
+                value={newStudySubject}
+                onChange={(e) => setNewStudySubject(e.target.value)}
+                placeholder="e.g., Biology, Mathematics, History"
+                list="study-subjects-list"
+              />
+              <datalist id="study-subjects-list">
+                {studySubjects.map((subj) => (
+                  <option key={subj} value={subj} />
+                ))}
+              </datalist>
+
+              <label htmlFor="study-topic">Topic (optional)</label>
+              <input
+                id="study-topic"
+                type="text"
+                value={newStudyTopic}
+                onChange={(e) => setNewStudyTopic(e.target.value)}
+                placeholder="e.g., Photosynthesis, Calculus"
+              />
+
+              <label htmlFor="study-question">Question/Note *</label>
+              <textarea
+                id="study-question"
+                value={newStudyQuestion}
+                onChange={(e) => setNewStudyQuestion(e.target.value)}
+                placeholder="Enter the question or note"
+                rows="2"
+              />
+
+              <label htmlFor="study-answer">Answer *</label>
+              <textarea
+                id="study-answer"
+                value={newStudyAnswer}
+                onChange={(e) => setNewStudyAnswer(e.target.value)}
+                placeholder="Enter the answer"
+                rows="2"
+              />
+
+              <label htmlFor="study-explanation">Explanation (optional)</label>
+              <textarea
+                id="study-explanation"
+                value={newStudyExplanation}
+                onChange={(e) => setNewStudyExplanation(e.target.value)}
+                placeholder="Detailed explanation for better learning..."
+                rows="3"
+              />
+
+              <button
+                type="button"
+                className="primary-button"
+                onClick={handleAddStudyNote}
+                disabled={!newStudySubject.trim() || !newStudyQuestion.trim() || !newStudyAnswer.trim()}
+              >
+                Add Study Material
+              </button>
+            </div>
+
+            {studySubjects.length > 0 && (
+              <div className="dashboard-section">
+                <h2>Study Materials by Subject</h2>
+                {studySubjects.map((subject) => {
+                  const subjectMaterials = studyNotes.filter((n) => n.subject === subject)
+                  const isExpanded = expandedSubject === subject
+                  return (
+                    <div key={subject} style={{ marginTop: '16px', padding: '12px', border: '1px solid #ddd', borderRadius: '4px', backgroundColor: '#f9f9f9' }}>
+                      <h3 
+                        onClick={() => setExpandedSubject(isExpanded ? null : subject)}
+                        style={{ margin: '0 0 8px 0', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}
+                      >
+                        <span>{isExpanded ? '▼' : '▶'}</span> {subject}
+                      </h3>
+                      <p style={{ margin: '0 0 12px 0', fontSize: '0.9em', color: '#666' }}>
+                        {subjectMaterials.length} material{subjectMaterials.length !== 1 ? 's' : ''}
+                      </p>
+                      {isExpanded && subjectMaterials.map((material, idx) => (
+                        <div key={material.id} style={{ marginTop: '8px', padding: '8px', backgroundColor: '#fff', borderRadius: '3px', border: '1px solid #e0e0e0' }}>
+                          <p style={{ margin: '0 0 4px 0', fontSize: '0.9em' }}><strong>Q{idx + 1}. {material.question}</strong></p>
+                          <p style={{ margin: '0 0 4px 0', fontSize: '0.9em' }}><strong>Answer:</strong> {material.answer}</p>
+                          {material.topic && <p style={{ margin: '0 0 4px 0', fontSize: '0.85em', color: '#666' }}>📌 Topic: {material.topic}</p>}
+                          {material.explanation && <p style={{ margin: '0', fontSize: '0.85em', color: '#555', fontStyle: 'italic' }}>📝 Explanation: {material.explanation}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        )}
       </div>
     )
   }
