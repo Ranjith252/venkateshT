@@ -33,24 +33,16 @@ const normalizeQuestions = (value) => {
       
       // Clean options: keep only meaningful strings
       const cleanedOptions = flatOptions
-        .filter((opt) => {
-          const str = String(opt).trim()
-          // Skip empty, single chars, single letters (A-D), or pure numbers
-          if (str.length <= 1) return false
-          if (/^[A-D]\.?$/.test(str)) return false
-          if (/^\d+$/.test(str)) return false
-          return true
-        })
+        .map((opt) => String(opt).trim())
+        .map((opt) => opt.replace(/^[A-D][\.|\)]\s+/, '').trim())
+        .filter((opt) => opt.length > 0)
         .slice(0, 4) // Take max 4
 
-      // Ensure exactly 4 options by padding with placeholders
-      const options = [
-        ...cleanedOptions,
-        ...Array.from(
-          { length: Math.max(0, 4 - cleanedOptions.length) },
-          (_, i) => `Option ${String.fromCharCode(65 + cleanedOptions.length + i)}`
-        ),
-      ].slice(0, 4)
+      if (cleanedOptions.length !== 4) {
+        return null
+      }
+
+      const options = cleanedOptions
 
       const answerIndex = Number(item?.answer)
       const safeAnswer = Number.isInteger(answerIndex) && answerIndex >= 0 && answerIndex < 4
@@ -113,11 +105,12 @@ function App() {
   const [newPasswordInput, setNewPasswordInput] = useState('')
   const [quizTitle, setQuizTitle] = useState('My Quiz')
   const [questions, setQuestions] = useState(() => {
-    // Always start with empty questions - admin will add them
     try {
-      localStorage.removeItem('quizQuestions') // Clear any existing questions
-    } catch (e) {}
-    return []
+      const saved = JSON.parse(localStorage.getItem('quizQuestions') || '[]')
+      return normalizeQuestions(saved)
+    } catch (e) {
+      return []
+    }
   })
   const [searchTerm, setSearchTerm] = useState('')
   const [videos, setVideos] = useState(() => {
@@ -239,8 +232,13 @@ function App() {
 
   const isAdmin = userRole === 'admin'
   const question = questions[currentIndex] || null
-  const questionOptions = Array.isArray(question?.options) && question.options.length > 0
-    ? question.options.filter(Boolean).slice(0, 4) // Filter empty options and take first 4
+  const cleanedQuestionOptions = question && Array.isArray(question.options)
+    ? question.options
+        .map((opt) => String(opt).trim())
+        .slice(0, 4)
+    : []
+  const questionOptions = cleanedQuestionOptions.length === 4
+    ? cleanedQuestionOptions
     : ['Option A', 'Option B', 'Option C', 'Option D']
   const isCorrect = selectedOption === question?.answer
 
@@ -396,18 +394,20 @@ function App() {
       return
     }
 
-    setQuestions((prev) => {
-      if (prev.length >= 100) return prev
-      return [
-        ...prev,
-        {
-          id: prev.length + 1,
-          question: text,
-          options: trimmedOptions, // Always exactly 4 options
-          answer: newCorrectIndex,
-        },
-      ]
-    })
+    if (questions.length >= 100) {
+      setErrorMessage('Maximum of 100 questions reached')
+      return
+    }
+
+    setQuestions((prev) => [
+      ...prev,
+      {
+        id: prev.length + 1,
+        question: text,
+        options: trimmedOptions, // Always exactly 4 options
+        answer: newCorrectIndex,
+      },
+    ])
 
     setNewQuestionText('')
     setNewOptions(['', '', '', ''])
@@ -508,6 +508,7 @@ function App() {
         if (cols.length < 6) continue
         const [q, a, b, c, d, ans] = cols.map((c) => c.trim())
         const answerIndex = Number(ans)
+        if (!q || !a || !b || !c || !d) continue
         if (Number.isNaN(answerIndex) || answerIndex < 0 || answerIndex > 3) continue
         parsed.push({
           id: Date.now() + Math.floor(Math.random() * 10000),
@@ -573,36 +574,38 @@ function App() {
     }
   }
 
-  const getTodaysExam = () => {
-    const today = new Date().toISOString().slice(0, 10)
-    const exam = exams[today]
-    if (!exam) return null
-    
-    // Check if exam has expired (24 hours)
+  const getActiveExam = () => {
     const now = new Date()
-    const expiresAt = exam.expiresAt ? new Date(exam.expiresAt) : new Date(exam.createdAt || 0) 
-    if (now > expiresAt) {
-      return null // Exam expired
-    }
-    return exam
+    const activeExams = Object.values(exams)
+      .filter((exam) => {
+        if (!exam) return false
+        const expiresAt = exam.expiresAt ? new Date(exam.expiresAt) : new Date(exam.createdAt || 0)
+        return now <= expiresAt
+      })
+    if (activeExams.length === 0) return null
+    return activeExams.reduce((latest, exam) => {
+      const latestCreated = new Date(latest.createdAt || 0)
+      const examCreated = new Date(exam.createdAt || 0)
+      return examCreated > latestCreated ? exam : latest
+    }, activeExams[0])
   }
 
   const handleStartExamToday = () => {
-    const todays = getTodaysExam()
+    const todays = getActiveExam()
     if (!todays) {
-      setErrorMessage('No exam available or exam has expired (24-hour limit).')
+      setErrorMessage('No active exam is available or the 24-hour window has expired.')
       return
     }
     // check if user is permitted (students must have phone permission to take exam)
     if (userRole === 'admin') {
-      setQuestions(normalizeQuestions(todays.questions))
+      setQuestions(normalizeQuestions(todays.questions).slice(0, 100))
       setQuizStarted(true)
       resetQuiz()
       return
     }
     const phone = currentPhone || user
     if (permittedPhones.includes(phone)) {
-      setQuestions(normalizeQuestions(todays.questions))
+      setQuestions(normalizeQuestions(todays.questions).slice(0, 100))
       setQuizStarted(true)
       resetQuiz()
     } else {
@@ -764,15 +767,15 @@ function App() {
               </div>
             ) : (
               <div className="exam-user">
-                {getTodaysExam() ? (
+                {getActiveExam() ? (
                   <>
-                    <p>Today's exam is available (valid for 24 hours from creation).</p>
+                    <p>An active exam is available (valid for 24 hours from creation).</p>
                     <button type="button" className="primary-button" onClick={handleStartExamToday}>
-                      Start Today's Exam
+                      Start Available Exam
                     </button>
                   </>
                 ) : (
-                  <p>No exam scheduled for today or exam has expired (24-hour limit).</p>
+                  <p>No active exam is available or the 24-hour window has expired.</p>
                 )}
               </div>
             )}
@@ -1203,7 +1206,7 @@ function App() {
 
                   return (
                     <button
-                      key={option}
+                      key={index}
                       type="button"
                       className={optionClass}
                       onClick={() => handleOptionClick(index)}
