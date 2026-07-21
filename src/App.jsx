@@ -61,13 +61,13 @@ const normalizeQuestions = (value) => {
 }
 
 function App() {
-  const [user, setUser] = useState('')
-  const [userRole, setUserRole] = useState('user')
+  const [user, setUser] = useState(() => localStorage.getItem('quizUser') || '')
+  const [userRole, setUserRole] = useState(() => localStorage.getItem('quizUserRole') || 'user')
   const [nameInput, setNameInput] = useState('')
   const [phoneInput, setPhoneInput] = useState('')
   const [passwordInput, setPasswordInput] = useState('')
   const [forgotMode, setForgotMode] = useState(false)
-  const [currentPhone, setCurrentPhone] = useState('')
+  const [currentPhone, setCurrentPhone] = useState(() => localStorage.getItem('quizUser') || '')
   const [adminPassword, setAdminPassword] = useState(() => localStorage.getItem('adminPassword') || 'V7702602713V')
   const [permittedPhones, setPermittedPhones] = useState(() => {
     try {
@@ -122,6 +122,8 @@ function App() {
   })
   const [videoTitleInput, setVideoTitleInput] = useState('')
   const [quizStarted, setQuizStarted] = useState(false)
+  const [activeExamQuestions, setActiveExamQuestions] = useState([])
+  const [activeExamTitle, setActiveExamTitle] = useState('')
   const [currentIndex, setCurrentIndex] = useState(0)
   const [selectedOption, setSelectedOption] = useState(null)
   const [score, setScore] = useState(0)
@@ -151,6 +153,13 @@ function App() {
   const [studySubjects, setStudySubjects] = useState(() => {
     try {
       return JSON.parse(localStorage.getItem('studySubjects') || '[]')
+    } catch (e) {
+      return []
+    }
+  })
+  const [adminAudit, setAdminAudit] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('adminAudit') || '[]')
     } catch (e) {
       return []
     }
@@ -230,8 +239,25 @@ function App() {
     } catch (e) {}
   }, [studySubjects])
 
+  useEffect(() => {
+    try {
+      localStorage.setItem('adminAudit', JSON.stringify(adminAudit))
+    } catch (e) {}
+  }, [adminAudit])
+
+  const pushAudit = (action) => {
+    const entry = { id: Date.now(), action, at: new Date().toISOString() }
+    setAdminAudit((prev) => [entry, ...prev].slice(0, 200))
+    setErrorMessage(action)
+  }
+
   const isAdmin = userRole === 'admin'
-  const question = questions[currentIndex] || null
+  const currentQuestions = quizStarted
+    ? activeExamQuestions.length > 0
+      ? activeExamQuestions
+      : questions
+    : questions
+  const question = currentQuestions[currentIndex] || null
   const cleanedQuestionOptions = question && Array.isArray(question.options)
     ? question.options
         .map((opt) => String(opt).trim())
@@ -471,6 +497,8 @@ function App() {
 
   const handleStartQuiz = () => {
     if (!quizTitle.trim() || questions.length === 0) return
+    setActiveExamQuestions(questions.slice(0, 100))
+    setActiveExamTitle(quizTitle)
     setQuizStarted(true)
     resetQuiz()
   }
@@ -478,6 +506,8 @@ function App() {
   const handleReturnToDashboard = () => {
     setQuizStarted(false)
     setShowScore(false)
+    setActiveExamQuestions([])
+    setActiveExamTitle('')
     resetQuiz()
   }
 
@@ -556,25 +586,35 @@ function App() {
 
   // Create an exam for a given date with N questions (default 20), valid for 24 hours
   const handleCreateExam = (dateStr, count = 20) => {
-    if (!dateStr) return
+    const today = new Date().toISOString().slice(0, 10)
+    const examDate = dateStr?.trim() || today
+
     // pick up to `count` random questions from pool
-    const pool = [...questions]
-    if (pool.length === 0) return
+    // Only include questions that have exactly 4 non-empty options
+    const pool = questions.filter((q) => Array.isArray(q.options) && q.options.filter(Boolean).length === 4)
+    if (pool.length === 0) {
+      setErrorMessage('No valid 4-option questions available to create an exam.')
+      return
+    }
     const selected = []
-    while (selected.length < Math.min(count, pool.length)) {
-      const idx = Math.floor(Math.random() * pool.length)
-      selected.push(pool.splice(idx, 1)[0])
+    const available = [...pool]
+    const target = Math.min(count, available.length)
+    while (selected.length < target) {
+      const idx = Math.floor(Math.random() * available.length)
+      selected.push(available.splice(idx, 1)[0])
     }
     const now = new Date().toISOString()
     setExams((prev) => ({
       ...prev,
-      [dateStr]: {
-        title: `Exam ${dateStr}`,
+      [examDate]: {
+        title: `Exam ${examDate}`,
         questions: selected,
         createdAt: now, // Store creation timestamp
         expiresAt: new Date(new Date(now).getTime() + 24 * 60 * 60 * 1000).toISOString(), // 24 hours from now
       },
     }))
+    setExamDateInput(examDate)
+    setErrorMessage(`Exam created for ${examDate}, valid for 24 hours.`)
   }
 
   const handleClearAllData = () => {
@@ -619,42 +659,35 @@ function App() {
       setErrorMessage('No active exam is available or the 24-hour window has expired.')
       return
     }
-    // check if user is permitted (students must have phone permission to take exam)
-    if (userRole === 'admin') {
-      const valid = Array.isArray(todays.questions)
-        ? todays.questions.filter((q) => Array.isArray(q.options) && q.options.length === 4).slice(0, 100)
-        : []
-      setQuestions(valid)
-      if (valid.length === 0) {
-        setErrorMessage('Active exam contains no valid 4-option questions. Contact admin.')
-        return
-      }
-      setQuizStarted(true)
-      resetQuiz()
+
+    const valid = Array.isArray(todays.questions)
+      ? todays.questions.filter((q) => Array.isArray(q.options) && q.options.length === 4).slice(0, 100)
+      : []
+    if (valid.length === 0) {
+      setErrorMessage('Active exam contains no valid 4-option questions. Contact admin.')
       return
     }
+
     const phone = currentPhone || user
-    if (permittedPhones.includes(phone)) {
-      const valid = Array.isArray(todays.questions)
-        ? todays.questions.filter((q) => Array.isArray(q.options) && q.options.length === 4).slice(0, 100)
-        : []
-      setQuestions(valid)
-      if (valid.length === 0) {
-        setErrorMessage('Active exam contains no valid 4-option questions. Contact admin.')
-        return
-      }
+    if (userRole === 'admin' || permittedPhones.includes(phone)) {
+      setActiveExamQuestions(valid)
+      setActiveExamTitle(todays.title || quizTitle)
+      setCurrentIndex(0)
+      setSelectedOption(null)
+      setScore(0)
+      setIsAnswered(false)
+      setShowScore(false)
       setQuizStarted(true)
-      resetQuiz()
-    } else {
-      // not permitted: create a permission request if not already requested
-      const exists = permissionRequests.find((r) => r.phone === phone)
-      if (!exists) {
-        const otp = String(Math.floor(100000 + Math.random() * 900000))
-        const req = { phone, otp, password: '', requestedAt: new Date().toISOString() }
-        setPermissionRequests((prev) => [...prev, req])
-      }
-      setErrorMessage('You are not permitted to take this exam yet. Permission requested from admin.')
+      return
     }
+
+    const exists = permissionRequests.find((r) => r.phone === phone)
+    if (!exists) {
+      const otp = String(Math.floor(100000 + Math.random() * 900000))
+      const req = { phone, otp, password: '', requestedAt: new Date().toISOString() }
+      setPermissionRequests((prev) => [...prev, req])
+    }
+    setErrorMessage('You are not permitted to take this exam yet. Permission requested from admin.')
   }
 
   // small component to manage permitted phones inside this file
@@ -670,7 +703,11 @@ function App() {
                 {p}{' '}
                 <button
                   type="button"
-                  onClick={() => setPermittedPhones((prev) => prev.filter((x) => x !== p))}
+                  onClick={() => {
+                    if (!window.confirm(`Revoke permission for ${p}?`)) return
+                    setPermittedPhones((prev) => prev.filter((x) => x !== p))
+                    pushAudit(`Revoked permission for ${p}`)
+                  }}
                 >
                   Revoke
                 </button>
@@ -678,6 +715,100 @@ function App() {
             ))}
           </ul>
         )}
+      </div>
+    )
+  }
+
+  // Admin debug panel: shows permitted phones, users, and exams with simple management actions
+  function AdminDebugPanel() {
+    const revokePhone = (p) => {
+      if (!window.confirm(`Revoke permission for ${p}?`)) return
+      setPermittedPhones((prev) => prev.filter((x) => x !== p))
+      pushAudit(`Revoked permission for ${p}`)
+    }
+
+    const removeUser = (u) => {
+      if (!window.confirm(`Remove stored user record for ${u}? This cannot be undone.`)) return
+      setUsers((prev) => {
+        const copy = { ...prev }
+        delete copy[u]
+        return copy
+      })
+      pushAudit(`Removed user record for ${u}`)
+    }
+
+    const removeExam = (key) => {
+      if (!window.confirm(`Remove exam ${key}? This will delete the exam and its questions.`)) return
+      setExams((prev) => {
+        const copy = { ...prev }
+        delete copy[key]
+        return copy
+      })
+      pushAudit(`Removed exam ${key}`)
+    }
+
+    return (
+      <div className="admin-debug" style={{ marginTop: 12, padding: 12, border: '1px dashed #ccc', borderRadius: 6 }}>
+        <h3>Admin Debug</h3>
+        <div style={{ marginBottom: 8 }}>
+          <strong>Permitted phones:</strong>
+          {permittedPhones.length === 0 ? <div>None</div> : (
+            <ul>
+              {permittedPhones.map((p) => (
+                <li key={p} style={{ marginBottom: 4 }}>
+                  {p}{' '}
+                  <button type="button" onClick={() => revokePhone(p)}>Revoke</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <strong>Users ({Object.keys(users).length}):</strong>
+          {Object.keys(users).length === 0 ? <div>None</div> : (
+            <ul>
+              {Object.keys(users).map((u) => (
+                <li key={u} style={{ marginBottom: 4 }}>
+                  {u} — <small>password stored</small>{' '}
+                  <button type="button" onClick={() => removeUser(u)}>Remove user</button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div>
+          <strong>Exams ({Object.keys(exams).length}):</strong>
+          {Object.keys(exams).length === 0 ? <div>None</div> : (
+            <ul>
+              {Object.entries(exams).map(([k, ex]) => (
+                <li key={k} style={{ marginBottom: 6 }}>
+                  <div><strong>{k}</strong> — {ex.title || ''}</div>
+                  <div>Questions: {Array.isArray(ex.questions) ? ex.questions.length : 0}</div>
+                  <div>Created: {ex.createdAt || 'n/a'} — Expires: {ex.expiresAt || 'n/a'}</div>
+                  <div style={{ marginTop: 4 }}>
+                    <button type="button" onClick={() => removeExam(k)}>Remove exam</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div style={{ marginTop: 8 }}>
+          <strong>Admin Audit ({adminAudit.length}):</strong>
+          {adminAudit.length === 0 ? (
+            <div>None</div>
+          ) : (
+            <ul>
+              {adminAudit.slice(0, 20).map((a) => (
+                <li key={a.id} style={{ marginBottom: 4 }}>
+                  <small style={{ color: '#666' }}>{new Date(a.at).toLocaleString()}</small> — {a.action}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     )
   }
@@ -902,6 +1033,11 @@ function App() {
               <PermittedPhonesManager />
             </div>
           )}
+          {isAdmin && (
+            <div style={{ marginTop: 12 }}>
+              <AdminDebugPanel />
+            </div>
+          )}
           </div>
         </header>
 
@@ -939,7 +1075,16 @@ function App() {
             </div>
             <div className="import-group">
               <label htmlFor="csv-import" className="upload-button">📥 Import CSV (question,A,B,C,D,answerIndex)</label>
-              <input id="csv-import" type="file" accept=".csv,text/csv" hidden onChange={handleImportCSV} disabled={questions.length >= 100} />
+              <input
+                id="csv-import"
+                type="file"
+                accept=".csv,text/csv"
+                hidden
+                onChange={handleImportCSV}
+                disabled={questions.length >= 100}
+                title={questions.length >= 100 ? 'Import disabled: 100 questions reached' : 'Import CSV (question,A,B,C,D,answerIndex)'}
+              />
+              {questions.length >= 100 && <p className="upload-note" style={{ color: '#c62828' }}>CSV import disabled: 100 question limit reached.</p>}
             </div>
             <div className="import-group">
               <button type="button" className="secondary-button" onClick={handleClearAllData} style={{ backgroundColor: '#ffebee', color: '#c62828' }}>
@@ -1201,7 +1346,7 @@ function App() {
         <section className="score-card">
           <h2>Your score</h2>
           <p>
-            You answered <strong>{score}</strong> of <strong>{questions.length}</strong> correctly.
+            You answered <strong>{score}</strong> of <strong>{currentQuestions.length}</strong> correctly.
           </p>
           <div className="quiz-actions">
             <button type="button" className="primary-button" onClick={handleRestart}>
@@ -1226,7 +1371,7 @@ function App() {
             <>
               <div className="question-top">
                 <span className="question-count">
-                  Question {currentIndex + 1} of {questions.length}
+                  Question {currentIndex + 1} of {currentQuestions.length}
                 </span>
                 <h2>{question.question}</h2>
               </div>
