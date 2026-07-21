@@ -354,29 +354,44 @@ function App() {
 
     if (phoneInput.trim() && passwordInput) {
       const phone = phoneInput.trim()
-      if (users[phone]) {
-        if (users[phone] === passwordInput) {
-          setUser(phone)
-          setUserRole('user')
-          setCurrentPhone(phone)
-          setNameInput('')
-          setPasswordInput('')
-          setPhoneInput('')
-          setErrorMessage('')
+        // If this phone has already been permitted by admin, allow login.
+        if (permittedPhones.includes(phone)) {
+          // If we have a stored password for this phone, validate it.
+          if (users[phone]) {
+            if (users[phone] === passwordInput) {
+              setUser(phone)
+              setUserRole('user')
+              setCurrentPhone(phone)
+              setNameInput('')
+              setPasswordInput('')
+              setPhoneInput('')
+              setErrorMessage('')
+            } else {
+              setErrorMessage('Incorrect password for this phone')
+            }
+          } else {
+            // Admin granted permission but user record missing: create user record with provided password and allow login.
+            setUsers((prev) => ({ ...prev, [phone]: passwordInput }))
+            setUser(phone)
+            setUserRole('user')
+            setCurrentPhone(phone)
+            setNameInput('')
+            setPasswordInput('')
+            setPhoneInput('')
+            setErrorMessage('')
+          }
         } else {
-          setErrorMessage('Incorrect password for this phone')
+          // Not yet permitted: create or report permission request
+          const existing = permissionRequests.find((r) => r.phone === phone)
+          if (!existing) {
+            const otp = String(Math.floor(100000 + Math.random() * 900000))
+            const req = { phone, otp, password: passwordInput, requestedAt: new Date().toISOString() }
+            setPermissionRequests((prev) => [...prev, req])
+            setErrorMessage('Permission requested. Teacher will receive OTP to approve.')
+          } else {
+            setErrorMessage('Permission already requested. Wait for teacher approval.')
+          }
         }
-      } else {
-        const existing = permissionRequests.find((r) => r.phone === phone)
-        if (!existing) {
-          const otp = String(Math.floor(100000 + Math.random() * 900000))
-          const req = { phone, otp, password: passwordInput, requestedAt: new Date().toISOString() }
-          setPermissionRequests((prev) => [...prev, req])
-          setErrorMessage('Permission requested. Teacher will receive OTP to approve.')
-        } else {
-          setErrorMessage('Permission already requested. Wait for teacher approval.')
-        }
-      }
     } else if (name) {
       setErrorMessage('Admin login requires password')
     } else {
@@ -606,14 +621,28 @@ function App() {
     }
     // check if user is permitted (students must have phone permission to take exam)
     if (userRole === 'admin') {
-      setQuestions(normalizeQuestions(todays.questions).slice(0, 100))
+      const valid = Array.isArray(todays.questions)
+        ? todays.questions.filter((q) => Array.isArray(q.options) && q.options.length === 4).slice(0, 100)
+        : []
+      setQuestions(valid)
+      if (valid.length === 0) {
+        setErrorMessage('Active exam contains no valid 4-option questions. Contact admin.')
+        return
+      }
       setQuizStarted(true)
       resetQuiz()
       return
     }
     const phone = currentPhone || user
     if (permittedPhones.includes(phone)) {
-      setQuestions(normalizeQuestions(todays.questions).slice(0, 100))
+      const valid = Array.isArray(todays.questions)
+        ? todays.questions.filter((q) => Array.isArray(q.options) && q.options.length === 4).slice(0, 100)
+        : []
+      setQuestions(valid)
+      if (valid.length === 0) {
+        setErrorMessage('Active exam contains no valid 4-option questions. Contact admin.')
+        return
+      }
       setQuizStarted(true)
       resetQuiz()
     } else {
