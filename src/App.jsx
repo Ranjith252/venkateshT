@@ -15,12 +15,33 @@ const normalizeQuestions = (value) => {
       if (!rawQuestion) return null // Skip questions without text
       
       let rawOptions = item?.options
-      
-      // Handle various malformed option formats
+
+      // Support object-based or string options saved in older formats
       if (!Array.isArray(rawOptions)) {
-        rawOptions = []
+        const candidateKeys = [
+          'optionA', 'optionB', 'optionC', 'optionD',
+          'A', 'B', 'C', 'D',
+          'option1', 'option2', 'option3', 'option4',
+          '1', '2', '3', '4',
+        ]
+        const mapped = []
+        for (const key of candidateKeys) {
+          if (item[key] !== undefined) {
+            mapped.push(item[key])
+          }
+        }
+        if (mapped.length > 0) {
+          rawOptions = mapped
+        } else if (typeof item?.options === 'string') {
+          rawOptions = item.options
+            .split(/[\n,;\/]+/)
+            .map((opt) => opt.trim())
+            .filter((opt) => opt.length > 0)
+        } else {
+          rawOptions = []
+        }
       }
-      
+
       // Flatten nested arrays (corrupted data sometimes has extra nesting)
       const flatOptions = []
       for (const opt of rawOptions) {
@@ -44,7 +65,23 @@ const normalizeQuestions = (value) => {
 
       const options = cleanedOptions
 
-      const answerIndex = Number(item?.answer)
+      let answerIndex = Number(item?.answer)
+      if (!Number.isInteger(answerIndex) || answerIndex < 0 || answerIndex >= 4) {
+        const answerValue = typeof item?.answer === 'string' ? item.answer.trim() : ''
+        const letterIndex = ['A', 'B', 'C', 'D'].indexOf(answerValue.toUpperCase())
+        if (letterIndex >= 0) {
+          answerIndex = letterIndex
+        } else {
+          const normalized = answerValue.replace(/^[A-D][\.\)]\s*/, '').trim()
+          if (options.includes(normalized)) {
+            answerIndex = options.indexOf(normalized)
+          } else if (options.includes(answerValue)) {
+            answerIndex = options.indexOf(answerValue)
+          } else {
+            answerIndex = 0
+          }
+        }
+      }
       const safeAnswer = Number.isInteger(answerIndex) && answerIndex >= 0 && answerIndex < 4
         ? answerIndex
         : 0
@@ -115,11 +152,46 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('')
   const [videos, setVideos] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem('uploadedVideos') || '[]')
+      // Try multiple possible localStorage keys for backwards compatibility
+      const keys = ['uploadedVideos', 'videos', 'savedVideos']
+      for (const k of keys) {
+        const raw = localStorage.getItem(k)
+        if (!raw) continue
+        try {
+          const parsed = JSON.parse(raw)
+          if (Array.isArray(parsed)) {
+            // normalize entries to have id, title/name, data, viewed
+            return parsed.map((v) => {
+              if (!v) return null
+              if (typeof v === 'string') {
+                return { id: String(Date.now() + Math.floor(Math.random() * 10000)), name: 'video', title: 'Video', data: v, viewed: false, uploadedAt: new Date().toISOString() }
+              }
+              return {
+                id: String(v.id || Date.now() + Math.floor(Math.random() * 10000)),
+                name: v.name || v.title || 'video',
+                title: v.title || v.name || 'Video',
+                data: v.data || v.url || '',
+                viewed: v.viewed || false,
+                uploadedAt: v.uploadedAt || new Date().toISOString(),
+              }
+            }).filter(Boolean)
+          }
+        } catch (e) {
+          continue
+        }
+      }
+      return []
     } catch (e) {
       return []
     }
   })
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('uploadedVideos', JSON.stringify(videos))
+    } catch (e) {}
+  }, [videos])
+  const [lastUploadedVideoId, setLastUploadedVideoId] = useState(null)
   const [videoTitleInput, setVideoTitleInput] = useState('')
   const [quizStarted, setQuizStarted] = useState(false)
   const [activeExamQuestions, setActiveExamQuestions] = useState([])
@@ -169,7 +241,10 @@ function App() {
   const [newStudyQuestion, setNewStudyQuestion] = useState('')
   const [newStudyAnswer, setNewStudyAnswer] = useState('')
   const [newStudyExplanation, setNewStudyExplanation] = useState('')
-  const [viewingStudyMaterials, setViewingStudyMaterials] = useState(false)
+  const [studentDashboardView, setStudentDashboardView] = useState(() => localStorage.getItem('studentDashboardView') || 'videos')
+  const [resourcePageOpen, setResourcePageOpen] = useState(false)
+  const [selectedVideoId, setSelectedVideoId] = useState(null)
+  const [selectedStudySubject, setSelectedStudySubject] = useState(() => localStorage.getItem('selectedStudySubject') || null)
   const [expandedSubject, setExpandedSubject] = useState(null)
 
   useEffect(() => {
@@ -177,6 +252,22 @@ function App() {
       localStorage.setItem('adminPassword', adminPassword)
     } catch (e) {}
   }, [adminPassword])
+
+  useEffect(() => {
+    // Remove any stale video selection persisted by older versions.
+    // This prevents the app from jumping directly into a previously-opened video.
+    try {
+      localStorage.removeItem('selectedVideoId')
+    } catch (e) {}
+
+    if (userRole === 'user') {
+      setSelectedVideoId(null)
+      setResourcePageOpen(false)
+    }
+  }, [userRole])
+
+  // Do not auto-open the first video when opening the Videos view.
+  // Users expect to see the list first and open a specific video by clicking it.
 
   useEffect(() => {
     if (user) {
@@ -226,6 +317,28 @@ function App() {
       localStorage.setItem('uploadedVideos', JSON.stringify(videos))
     } catch (e) {}
   }, [videos])
+
+  // Auto-scroll to the last uploaded video button when a new video is added
+  useEffect(() => {
+    if (!lastUploadedVideoId) return
+    const el = document.getElementById(`video-btn-${lastUploadedVideoId}`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // brief highlight by focusing then blurring
+      try {
+        el.focus()
+        setTimeout(() => el.blur(), 600)
+      } catch (e) {}
+    }
+    // clear the marker
+    setLastUploadedVideoId(null)
+  }, [lastUploadedVideoId])
+
+  useEffect(() => {
+    if (selectedVideoId && videos.length > 0 && !videos.some((v) => v.id === selectedVideoId)) {
+      setSelectedVideoId(null)
+    }
+  }, [selectedVideoId, videos])
 
   useEffect(() => {
     try {
@@ -300,7 +413,7 @@ function App() {
 
   const handleNext = () => {
     const nextIndex = currentIndex + 1
-    if (nextIndex < questions.length) {
+    if (nextIndex < currentQuestions.length) {
       setCurrentIndex(nextIndex)
       setSelectedOption(null)
       setIsAnswered(false)
@@ -524,12 +637,18 @@ function App() {
     reader.onload = (e) => {
       const dataUrl = e.target.result
       const vid = {
-        id: Date.now() + Math.floor(Math.random() * 10000),
+        id: String(Date.now() + Math.floor(Math.random() * 10000)),
         name: file.name,
         title: (videoTitleInput || file.name).trim(),
         data: dataUrl,
+        viewed: false,
+        uploadedAt: new Date().toISOString(),
       }
-      setVideos((prev) => [...prev, vid])
+      setVideos((prev) => {
+        const next = [...prev, vid]
+        setLastUploadedVideoId(vid.id)
+        return next
+      })
       setVideoTitleInput('')
     }
     reader.readAsDataURL(file)
@@ -581,6 +700,59 @@ function App() {
     }
     reader.readAsText(file)
     // clear input value so same file can be re-selected later
+    event.target.value = ''
+  }
+
+  const handleExportAppData = () => {
+    const data = {
+      questions,
+      exams,
+      permittedPhones,
+      permissionRequests,
+      users,
+      resetRequests,
+      studyNotes,
+      studySubjects,
+      adminAudit,
+      videos,
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `quiz-backup-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleImportAppData = (event) => {
+    const file = event.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const imported = JSON.parse(e.target.result)
+        if (!imported || typeof imported !== 'object') {
+          throw new Error('Invalid backup format')
+        }
+        if (Array.isArray(imported.questions)) setQuestions(normalizeQuestions(imported.questions))
+        if (imported.exams && typeof imported.exams === 'object') setExams(imported.exams)
+        if (Array.isArray(imported.permittedPhones)) setPermittedPhones(imported.permittedPhones)
+        if (Array.isArray(imported.permissionRequests)) setPermissionRequests(imported.permissionRequests)
+        if (imported.users && typeof imported.users === 'object') setUsers(imported.users)
+        if (imported.resetRequests && typeof imported.resetRequests === 'object') setResetRequests(imported.resetRequests)
+        if (Array.isArray(imported.studyNotes)) setStudyNotes(imported.studyNotes)
+        if (Array.isArray(imported.studySubjects)) setStudySubjects(imported.studySubjects)
+        if (Array.isArray(imported.adminAudit)) setAdminAudit(imported.adminAudit)
+        if (Array.isArray(imported.videos)) setVideos(imported.videos)
+        setErrorMessage('App backup imported successfully.')
+      } catch (error) {
+        setErrorMessage('Failed to import backup file. Please use a valid export file.')
+      }
+    }
+    reader.readAsText(file)
     event.target.value = ''
   }
 
@@ -913,26 +1085,51 @@ function App() {
           <div className="dashboard-section">
             <h2>Exams</h2>
             {isAdmin ? (
-              <div className="exam-creator">
-                <label htmlFor="exam-date">Exam date</label>
-                <input id="exam-date" type="date" value={examDateInput} onChange={(e) => setExamDateInput(e.target.value)} />
-                <label htmlFor="exam-size">Size (max 100)</label>
-                <input id="exam-size" type="number" min={1} max={100} value={examSizeInput} onChange={(e) => setExamSizeInput(Number(e.target.value))} />
-                <button
-                  type="button"
-                  className="primary-button"
-                  onClick={() => {
-                    if (examDateInput) {
-                      const size = Math.min(100, Math.max(1, Number(examSizeInput) || 20))
-                      handleCreateExam(examDateInput, size)
-                      setExamDateInput('')
-                    }
-                  }}
-                  disabled={!examDateInput || questions.length === 0}
-                >
-                  Create Exam
-                </button>
-              </div>
+              <>
+                <div className="exam-creator">
+                  <label htmlFor="exam-date">Exam date</label>
+                  <input id="exam-date" type="date" value={examDateInput} onChange={(e) => setExamDateInput(e.target.value)} />
+                  <label htmlFor="exam-size">Size (max 100)</label>
+                  <input id="exam-size" type="number" min={1} max={100} value={examSizeInput} onChange={(e) => setExamSizeInput(Number(e.target.value))} />
+                  <button
+                    type="button"
+                    className="primary-button"
+                    onClick={() => {
+                      if (examDateInput) {
+                        const size = Math.min(100, Math.max(1, Number(examSizeInput) || 20))
+                        handleCreateExam(examDateInput, size)
+                        setExamDateInput('')
+                      }
+                    }}
+                    disabled={!examDateInput || questions.length === 0}
+                  >
+                    Create Exam
+                  </button>
+                </div>
+                {Object.keys(exams).length > 0 && (
+                  <div className="dashboard-section" style={{ marginTop: 16 }}>
+                    <h2>Scheduled Daily Exams</h2>
+                    <p>Manage exams and see which ones are currently active.</p>
+                    <ul style={{ marginLeft: 16 }}>
+                      {Object.entries(exams)
+                        .sort(([a], [b]) => new Date(a) - new Date(b))
+                        .map(([date, exam]) => {
+                          const expiresAt = exam.expiresAt ? new Date(exam.expiresAt) : null
+                          const now = new Date()
+                          const active = expiresAt ? now <= expiresAt : false
+                          return (
+                            <li key={date} style={{ marginBottom: 8 }}>
+                              <strong>{date}</strong> — {exam.title || `Exam ${date}`} ({Array.isArray(exam.questions) ? exam.questions.length : 0} questions)
+                              <div style={{ fontSize: 13, color: active ? '#1b5e20' : '#b71c1c' }}>
+                                {active ? `Active until ${expiresAt?.toLocaleString()}` : `Expired ${expiresAt?.toLocaleString()}`}
+                              </div>
+                            </li>
+                          )
+                        })}
+                    </ul>
+                  </div>
+                )}
+              </>
             ) : (
               <div className="exam-user">
                 {getActiveExam() ? (
@@ -948,31 +1145,168 @@ function App() {
               </div>
             )}
 
-          {!isAdmin && studyNotes.length > 0 && (
+          {(videos.length > 0 || studyNotes.length > 0) && (
             <div className="dashboard-section">
-              <h2>📚 Study Materials</h2>
-              <p>Browse and study materials organized by subject to prepare for your exam.</p>
-              {studySubjects.map((subject) => {
-                const subjectMaterials = studyNotes.filter((n) => n.subject === subject)
-                return (
-                  <div key={subject} style={{ marginTop: '12px', padding: '10px', backgroundColor: '#f5f5f5', borderRadius: '4px', border: '1px solid #ddd' }}>
-                    <h3 style={{ margin: '0 0 6px 0', fontSize: '1em' }}>{subject}</h3>
-                    <p style={{ margin: '0 0 8px 0', fontSize: '0.85em', color: '#666' }}>
-                      {subjectMaterials.length} material{subjectMaterials.length !== 1 ? 's' : ''}
-                    </p>
-                    {subjectMaterials.map((material, idx) => (
-                      <div key={material.id} style={{ marginTop: '6px', padding: '8px', backgroundColor: '#fff', borderRadius: '3px', border: '1px solid #e0e0e0' }}>
-                        <p style={{ margin: '0 0 4px 0', fontSize: '0.9em' }}><strong>Q{idx + 1}. {material.question}</strong></p>
-                        <p style={{ margin: '0 0 4px 0', fontSize: '0.9em', backgroundColor: '#e8f5e9', padding: '4px', borderRadius: '2px' }}><strong>✓ Answer:</strong> {material.answer}</p>
-                        {material.topic && <p style={{ margin: '4px 0', fontSize: '0.85em', color: '#666' }}>📌 <strong>Topic:</strong> {material.topic}</p>}
-                        {material.explanation && <div style={{ marginTop: '4px', padding: '6px', backgroundColor: '#e3f2fd', borderLeft: '2px solid #1976d2', borderRadius: '2px' }}>
-                          <p style={{ margin: '0', fontSize: '0.85em', color: '#1565c0' }}><strong>💡 Explanation:</strong> {material.explanation}</p>
-                        </div>}
-                      </div>
-                    ))}
-                  </div>
-                )
-              })}
+              <h2>Learning Resources</h2>
+              <p>Select either videos or study materials to browse content separately.</p>
+
+              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+                <button
+                  type="button"
+                  className={studentDashboardView === 'videos' ? 'primary-button' : 'secondary-button'}
+                  onClick={() => {
+                    setStudentDashboardView('videos')
+                    setSelectedStudySubject(null)
+                    setSelectedVideoId(null) // show list first; user opens a video by clicking
+                    setResourcePageOpen(true)
+                  }}
+                >
+                  Videos
+                </button>
+                <button
+                  type="button"
+                  className={studentDashboardView === 'materials' ? 'primary-button' : 'secondary-button'}
+                  onClick={() => {
+                    setStudentDashboardView('materials')
+                    setSelectedVideoId(null)
+                    setResourcePageOpen(true)
+                  }}
+                >
+                  Study Materials
+                </button>
+              </div>
+
+              {resourcePageOpen ? (
+                <div>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    onClick={() => setResourcePageOpen(false)}
+                    style={{ marginBottom: 12 }}
+                  >
+                    ◀ Back to dashboard
+                  </button>
+                  {studentDashboardView === 'videos' ? (
+                    <div>
+                      <h3>Videos</h3>
+                      <p style={{ margin: '4px 0 12px 0', color: '#555', fontSize: '0.95em' }}>
+                        Uploaded videos are saved in your browser and remain available after refresh, browser reopen, or logout.
+                      </p>
+                      {videos.length === 0 ? (
+                        <p>No videos have been uploaded yet.</p>
+                      ) : selectedVideoId ? (
+                        <div>
+                          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                            <button type="button" className="secondary-button" onClick={() => setSelectedVideoId(null)}>
+                              ◀ Back to video list
+                            </button>
+                            <a
+                              className="secondary-button"
+                              href={videos.find((v) => v.id === selectedVideoId)?.data}
+                              download={videos.find((v) => v.id === selectedVideoId)?.name || 'video'}
+                              style={{ textDecoration: 'none', display: 'inline-block' }}
+                            >
+                              Download
+                            </a>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                onClick={() => {
+                                  if (!window.confirm('Delete this video?')) return
+                                  const id = selectedVideoId
+                                  setVideos((prev) => prev.filter((v) => v.id !== id))
+                                  setSelectedVideoId(null)
+                                }}
+                              >
+                                Remove
+                              </button>
+                            )}
+                          </div>
+                          <div style={{ marginTop: 12 }}>
+                            <h4>Selected video</h4>
+                            <video controls src={videos.find((v) => v.id === selectedVideoId)?.data} style={{ maxWidth: '100%', height: 'auto' }} />
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, maxHeight: 260, overflowY: 'auto', padding: 6 }}>
+                          {videos.map((video) => (
+                            <div key={video.id} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                              <button
+                                id={`video-btn-${video.id}`}
+                                type="button"
+                                className={selectedVideoId === video.id ? 'primary-button' : 'secondary-button'}
+                                onClick={() => {
+                                  setSelectedVideoId(video.id)
+                                  // mark as viewed
+                                  setVideos((prev) => prev.map((v) => (v.id === video.id ? { ...v, viewed: true } : v)))
+                                }}
+                              >
+                                {video.title || video.name}
+                                {!video.viewed && <span style={{ marginLeft: 6, background: '#c62828', color: '#fff', padding: '2px 6px', borderRadius: 10, fontSize: 12 }}>New</span>}
+                              </button>
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => {
+                                    if (!window.confirm(`Delete video ${video.title || video.name}?`)) return
+                                    setVideos((prev) => prev.filter((v) => v.id !== video.id))
+                                  }}
+                                  title="Remove video"
+                                >
+                                  Remove
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div>
+                      <h3>Study Materials</h3>
+                      {studySubjects.length === 0 ? (
+                        <p>No study materials have been added yet.</p>
+                      ) : (
+                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+                          {studySubjects.map((subject) => (
+                            <button
+                              key={subject}
+                              type="button"
+                              className={selectedStudySubject === subject ? 'primary-button' : 'secondary-button'}
+                              onClick={() => setSelectedStudySubject(subject)}
+                            >
+                              {subject}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+
+                      {selectedStudySubject ? (
+                        <div style={{ marginTop: 8 }}>
+                          <button type="button" className="secondary-button" onClick={() => setSelectedStudySubject(null)} style={{ marginBottom: 8 }}>
+                            ◀ Back to subjects
+                          </button>
+                          <h4>{selectedStudySubject}</h4>
+                          {studyNotes.filter((note) => note.subject === selectedStudySubject).map((material, idx) => (
+                            <div key={material.id} style={{ marginBottom: 12, padding: 12, backgroundColor: '#fff', borderRadius: 6, border: '1px solid #ddd' }}>
+                              <p style={{ margin: '0 0 6px 0', fontSize: '0.95em' }}><strong>Q{idx + 1}. {material.question}</strong></p>
+                              <p style={{ margin: '0 0 6px 0' }}><strong>Answer:</strong> {material.answer}</p>
+                              {material.topic && <p style={{ margin: '0 0 6px 0', color: '#666' }}>📌 Topic: {material.topic}</p>}
+                              {material.explanation && <p style={{ margin: 0, color: '#555' }}>📝 {material.explanation}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        studySubjects.length > 0 && <p>Select a subject to view its study notes.</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p>Click a resource button above to open the content on a separate page.</p>
+              )}
             </div>
           )}
 
@@ -1091,6 +1425,24 @@ function App() {
                 🗑️ Clear All Data
               </button>
               <p className="upload-note">Removes all questions, exams, videos, and user data. Start completely fresh.</p>
+            </div>
+
+            <div className="import-group">
+              <button type="button" className="secondary-button" onClick={handleExportAppData} style={{ backgroundColor: '#e3f2fd', color: '#1565c0' }}>
+                📦 Export App Data
+              </button>
+              <p className="upload-note">Download current questions, exams, permissions, and study data as JSON.</p>
+            </div>
+            <div className="import-group">
+              <label htmlFor="app-data-import" className="upload-button">📥 Import App Backup</label>
+              <input
+                id="app-data-import"
+                type="file"
+                accept="application/json"
+                hidden
+                onChange={handleImportAppData}
+              />
+              <p className="upload-note">Restore app state from a previously exported backup file.</p>
             </div>
           </section>
         )}
@@ -1407,7 +1759,7 @@ function App() {
                   onClick={isAnswered ? handleNext : handleSubmit}
                   disabled={selectedOption === null}
                 >
-                  {isAnswered ? (currentIndex + 1 < questions.length ? 'Next question' : 'Show results') : 'Submit answer'}
+                  {isAnswered ? (currentIndex + 1 < currentQuestions.length ? 'Next question' : 'Show results') : 'Submit answer'}
                 </button>
               </div>
 
