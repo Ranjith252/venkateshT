@@ -505,7 +505,7 @@ function App() {
       const parsed = []
       for (const line of lines) {
         const cols = line.split(',')
-        if (cols.length < 6) continue
+        if (cols.length !== 6) continue
         const [q, a, b, c, d, ans] = cols.map((c) => c.trim())
         const answerIndex = Number(ans)
         if (!q || !a || !b || !c || !d) continue
@@ -520,10 +520,18 @@ function App() {
       if (parsed.length) {
         setQuestions((prev) => {
           const remaining = 100 - prev.length
-          if (remaining <= 0) return prev
+          if (remaining <= 0) {
+            setErrorMessage('Cannot import more questions: maximum of 100 reached.')
+            return prev
+          }
           const toAdd = parsed.slice(0, remaining)
+          if (toAdd.length < parsed.length) {
+            setErrorMessage(`Imported ${toAdd.length} questions; ${parsed.length - toAdd.length} were skipped because the 100-question limit was reached.`)
+          }
           return [...prev, ...toAdd]
         })
+      } else {
+        setErrorMessage('CSV import failed: each row must include a question, 4 options, and an answer index.')
       }
     }
     reader.readAsText(file)
