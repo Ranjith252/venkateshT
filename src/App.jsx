@@ -608,6 +608,17 @@ function App() {
     setErrorMessage('')
   }
 
+  const handleRemoveStudyNote = (id) => {
+    if (!window.confirm('Remove this study material?')) return
+    setStudyNotes((prev) => {
+      const next = prev.filter((n) => n.id !== id)
+      // update subjects if a subject has no materials left
+      const remainingSubjects = Array.from(new Set(next.map((n) => n.subject)))
+      setStudySubjects(remainingSubjects)
+      return next
+    })
+  }
+
   const handleStartQuiz = () => {
     if (!quizTitle.trim() || questions.length === 0) return
     setActiveExamQuestions(questions.slice(0, 100))
@@ -990,15 +1001,16 @@ function App() {
       <div className="login-screen">
         <div className="login-card">
           <h1>Admin / Student Login</h1>
-          <form onSubmit={handleLogin} className="login-form">
+          <form onSubmit={handleLogin} className="login-form" autoComplete="off">
             <p className="login-note">Admin: enter your name and password. Student: enter phone and password to request access.</p>
             <p className="login-note">New students must request permission here, then the admin approves them before they can take the exam.</p>
             
             <label htmlFor="name">Name</label>
             <input
               id="name"
+              name="loginName"
               type="text"
-
+              autoComplete="off"
               value={nameInput}
               onChange={(e) => setNameInput(e.target.value)}
               placeholder="Your name"
@@ -1006,7 +1018,9 @@ function App() {
             <label htmlFor="phone">Phone (students login with phone)</label>
             <input
               id="phone"
+              name="loginPhone"
               type="tel"
+              autoComplete="off"
               value={phoneInput}
               onChange={(e) => setPhoneInput(e.target.value)}
               placeholder="Student phone (digits only)"
@@ -1017,7 +1031,9 @@ function App() {
                 <label htmlFor="password">Password</label>
                 <input
                   id="password"
+                  name="loginPassword"
                   type="password"
+                  autoComplete="new-password"
                   value={passwordInput}
                   onChange={(e) => setPasswordInput(e.target.value)}
                   placeholder="Admin or student password"
@@ -1295,6 +1311,11 @@ function App() {
                               <p style={{ margin: '0 0 6px 0' }}><strong>Answer:</strong> {material.answer}</p>
                               {material.topic && <p style={{ margin: '0 0 6px 0', color: '#666' }}>📌 Topic: {material.topic}</p>}
                               {material.explanation && <p style={{ margin: 0, color: '#555' }}>📝 {material.explanation}</p>}
+                              {isAdmin && (
+                                <div style={{ marginTop: 8 }}>
+                                  <button type="button" className="secondary-button" onClick={() => handleRemoveStudyNote(material.id)}>Remove</button>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -1662,6 +1683,11 @@ function App() {
                           <p style={{ margin: '0 0 4px 0', fontSize: '0.9em' }}><strong>Answer:</strong> {material.answer}</p>
                           {material.topic && <p style={{ margin: '0 0 4px 0', fontSize: '0.85em', color: '#666' }}>📌 Topic: {material.topic}</p>}
                           {material.explanation && <p style={{ margin: '0', fontSize: '0.85em', color: '#555', fontStyle: 'italic' }}>📝 Explanation: {material.explanation}</p>}
+                          {isAdmin && (
+                            <div style={{ marginTop: 8 }}>
+                              <button type="button" className="secondary-button" onClick={() => handleRemoveStudyNote(material.id)}>Remove</button>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
