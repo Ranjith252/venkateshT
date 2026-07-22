@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import './App.css'
 
 const initialQuestions = [] // Start with empty questions - admin will add up to 100 questions
@@ -214,6 +214,32 @@ function App() {
   })
   const [examDateInput, setExamDateInput] = useState('')
   const [examSizeInput, setExamSizeInput] = useState(20)
+  const [lastCreatedExamDate, setLastCreatedExamDate] = useState(null)
+  const [notifications, setNotifications] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('quizNotifications') || '[]')
+    } catch (e) {
+      return []
+    }
+  })
+  const [showNotificationsPanel, setShowNotificationsPanel] = useState(false)
+  const [notificationRecipients, setNotificationRecipients] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('notificationRecipients') || '[]')
+    } catch (e) {
+      return []
+    }
+  })
+  const [newRecipientInput, setNewRecipientInput] = useState('')
+  const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('desktopNotificationsEnabled') || 'false')
+    } catch (e) {
+      return false
+    }
+  })
+
+  const bcRef = useRef(null)
   // SEPARATE Study Materials System (Independent from Quiz)
   const [studyNotes, setStudyNotes] = useState(() => {
     try {
@@ -351,6 +377,46 @@ function App() {
       localStorage.setItem('studySubjects', JSON.stringify(studySubjects))
     } catch (e) {}
   }, [studySubjects])
+  useEffect(() => {
+    try {
+      localStorage.setItem('quizNotifications', JSON.stringify(notifications))
+    } catch (e) {}
+  }, [notifications])
+  useEffect(() => {
+    try {
+      localStorage.setItem('notificationRecipients', JSON.stringify(notificationRecipients))
+    } catch (e) {}
+  }, [notificationRecipients])
+  useEffect(() => {
+    try {
+      localStorage.setItem('desktopNotificationsEnabled', JSON.stringify(desktopNotificationsEnabled))
+    } catch (e) {}
+  }, [desktopNotificationsEnabled])
+
+  // Initialize BroadcastChannel for in-app push between tabs
+  useEffect(() => {
+    try {
+      if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
+        const bc = new BroadcastChannel('quiz-notifications')
+        bcRef.current = bc
+        bc.onmessage = (ev) => {
+          const note = ev.data
+          if (note && note.id) {
+            setNotifications((prev) => [note, ...prev])
+            // show desktop notification if enabled
+            if (desktopNotificationsEnabled && window.Notification && Notification.permission === 'granted') {
+              try {
+                new Notification(note.title, { body: note.message })
+              } catch (e) {}
+            }
+          }
+        }
+        return () => {
+          try { bc.close() } catch (e) {}
+        }
+      }
+    } catch (e) {}
+  }, [desktopNotificationsEnabled])
 
   useEffect(() => {
     try {
@@ -797,7 +863,50 @@ function App() {
       },
     }))
     setExamDateInput(examDate)
+    setLastCreatedExamDate(examDate)
+    pushAudit(`Created exam ${examDate} with ${selected.length} questions`)
     setErrorMessage(`Exam created for ${examDate}, valid for 24 hours.`)
+    // push a user notification so students see new exam
+    const note = {
+      id: `n_${Date.now()}`,
+      type: 'exam',
+      title: `Exam scheduled ${examDate}`,
+      message: `An exam for ${examDate} has been created (${selected.length} questions).`,
+      date: new Date().toISOString(),
+      read: false,
+    }
+    setNotifications((prev) => [note, ...prev])
+    // broadcast to other tabs/windows for in-app push
+    try {
+      if (bcRef.current) bcRef.current.postMessage(note)
+      // also show desktop notification if enabled
+      if (desktopNotificationsEnabled && window.Notification && Notification.permission === 'granted') {
+        try { new Notification(note.title, { body: note.message }) } catch (e) {}
+      }
+      // if permission not yet granted, request it when admin enables
+    } catch (e) {}
+    // send server-side emails if configured and recipients exist
+    try {
+      if (notificationRecipients && notificationRecipients.length > 0) {
+        fetch((process.env.REACT_APP_BACKEND_URL || '') + '/api/send-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: notificationRecipients,
+            subject: note.title,
+            text: note.message,
+            html: `<p>${note.message}</p><p>Exam date: ${examDate}</p>`,
+          }),
+        })
+          .then((r) => r.json())
+          .then((resJson) => pushAudit(`Email notify: ${resJson.ok ? 'sent' : 'failed'}`))
+          .catch((err) => pushAudit(`Email notify failed: ${String(err)}`))
+      }
+    } catch (e) {
+      pushAudit(`Email notify error: ${String(e)}`)
+    }
+    // clear highlight after a short while
+    setTimeout(() => setLastCreatedExamDate(null), 7000)
   }
 
   const handleClearAllData = () => {
@@ -1093,9 +1202,65 @@ function App() {
                   : `Welcome, ${user}. Start your scheduled MCQ exam when available.`}
               </p>
             </div>
-            <button type="button" className="secondary-button" onClick={handleLogout}>
-              Logout
-            </button>
+            {isAdmin && lastCreatedExamDate && (
+              <div style={{ position: 'fixed', right: 20, top: 80, background: '#323232', color: '#fff', padding: '10px 14px', borderRadius: 6, boxShadow: '0 6px 18px rgba(0,0,0,0.2)', zIndex: 60 }}>
+                <div style={{ fontWeight: 600 }}>Exam created</div>
+                <div style={{ fontSize: 13 }}>Exam for {lastCreatedExamDate} created successfully.</div>
+              </div>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ position: 'relative' }}>
+                <button type="button" className="secondary-button" onClick={() => setShowNotificationsPanel((s) => !s)}>
+                  🔔 Notifications
+                </button>
+                {notifications.filter((n) => !n.read).length > 0 && (
+                  <span style={{ position: 'absolute', top: -6, right: -6, background: '#d32f2f', color: '#fff', borderRadius: 10, padding: '2px 6px', fontSize: 12 }}>
+                    {notifications.filter((n) => !n.read).length}
+                  </span>
+                )}
+                {showNotificationsPanel && (
+                  <div style={{ position: 'absolute', right: 0, top: 36, width: 320, maxHeight: 320, overflowY: 'auto', background: '#fff', boxShadow: '0 6px 18px rgba(0,0,0,0.12)', borderRadius: 6, padding: 8, zIndex: 40 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <strong>Notifications</strong>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button type="button" className="secondary-button" onClick={() => setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))}>Mark all read</button>
+                        <button type="button" className="secondary-button" onClick={() => {
+                          if (!('Notification' in window)) {
+                            setErrorMessage('This browser does not support desktop notifications')
+                            return
+                          }
+                          if (Notification.permission === 'granted') {
+                            setDesktopNotificationsEnabled((s) => !s)
+                          } else if (Notification.permission !== 'denied') {
+                            Notification.requestPermission().then((perm) => {
+                              if (perm === 'granted') setDesktopNotificationsEnabled(true)
+                              else setDesktopNotificationsEnabled(false)
+                            })
+                          } else {
+                            setErrorMessage('Desktop notifications are blocked in your browser. Allow them in browser settings.')
+                          }
+                        }}>{desktopNotificationsEnabled ? 'Disable desktop' : 'Enable desktop'}</button>
+                      </div>
+                    </div>
+                    {notifications.length === 0 ? <div style={{ color: '#666' }}>No notifications</div> : (
+                      notifications.map((n) => (
+                        <div key={n.id} style={{ padding: 8, borderBottom: '1px solid #eee', background: n.read ? 'transparent' : '#f7f7ff' }}>
+                          <div style={{ fontSize: 13, fontWeight: 600 }}>{n.title}</div>
+                          <div style={{ fontSize: 13, color: '#444' }}>{n.message}</div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                            {!n.read && <button type="button" className="primary-button" onClick={() => setNotifications((prev) => prev.map((x) => x.id === n.id ? { ...x, read: true } : x))}>Mark read</button>}
+                            <button type="button" className="secondary-button" onClick={() => setNotifications((prev) => prev.filter((x) => x.id !== n.id))}>Dismiss</button>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+              <button type="button" className="secondary-button" onClick={handleLogout}>
+                Logout
+              </button>
+            </div>
           </div>
 
           <div className="dashboard-section">
@@ -1114,13 +1279,38 @@ function App() {
                       if (examDateInput) {
                         const size = Math.min(100, Math.max(1, Number(examSizeInput) || 20))
                         handleCreateExam(examDateInput, size)
-                        setExamDateInput('')
                       }
                     }}
                     disabled={!examDateInput || questions.length === 0}
                   >
                     Create Exam
                   </button>
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <h3>Notification Recipients (emails)</h3>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <input type="email" placeholder="email@example.com" value={newRecipientInput} onChange={(e) => setNewRecipientInput(e.target.value)} />
+                    <button type="button" className="primary-button" onClick={() => {
+                      const email = (newRecipientInput || '').trim()
+                      if (!email) return
+                      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+                        setErrorMessage('Invalid email address')
+                        return
+                      }
+                      if (!notificationRecipients.includes(email)) setNotificationRecipients((p) => [email, ...p])
+                      setNewRecipientInput('')
+                      setErrorMessage('')
+                    }}>Add recipient</button>
+                  </div>
+                  {notificationRecipients.length === 0 ? <div style={{ color: '#666', marginTop: 8 }}>No recipients configured.</div> : (
+                    <ul style={{ marginTop: 8 }}>
+                      {notificationRecipients.map((r) => (
+                        <li key={r} style={{ marginBottom: 6 }}>
+                          {r} <button type="button" onClick={() => setNotificationRecipients((prev) => prev.filter((x) => x !== r))}>Remove</button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
                 {Object.keys(exams).length > 0 && (
                   <div className="dashboard-section" style={{ marginTop: 16 }}>
@@ -1135,10 +1325,15 @@ function App() {
                           const active = expiresAt ? now <= expiresAt : false
                           return (
                             <li key={date} style={{ marginBottom: 8 }}>
-                              <strong>{date}</strong> — {exam.title || `Exam ${date}`} ({Array.isArray(exam.questions) ? exam.questions.length : 0} questions)
+                                  <div id={`exam-${date}`} style={{ padding: 6, borderRadius: 4, backgroundColor: date === lastCreatedExamDate ? '#fff8e1' : 'transparent' }}>
+                                    <strong>{date}</strong> — {exam.title || `Exam ${date}`} ({Array.isArray(exam.questions) ? exam.questions.length : 0} questions)
+                                  </div>
                               <div style={{ fontSize: 13, color: active ? '#1b5e20' : '#b71c1c' }}>
                                 {active ? `Active until ${expiresAt?.toLocaleString()}` : `Expired ${expiresAt?.toLocaleString()}`}
                               </div>
+                                  {date === lastCreatedExamDate && (
+                                    <script dangerouslySetInnerHTML={{ __html: `setTimeout(()=>{const el=document.getElementById('exam-${date}'); if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},50)` }} />
+                                  )}
                             </li>
                           )
                         })}
